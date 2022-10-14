@@ -1,0 +1,215 @@
+---
+title: "Spam Classification - Naive Bayes"
+author: "Nicolas Picazo"
+date: "2022-10-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## SMS Classification
+
+In this project, SMS data obtained from the UCI data website is used to classify whether they are spam or not. The model used to classify the SMS data is the Naive Bayes algorithm from the e1071 library.
+
+First we explore the dataset to better understand it. Then the data is cleaned before visualizing it using word clouds. These word clouds will help us visualize the most common words that appear in the entire dataset, the spam subset and the ham (not spam) subset. Finally, the prepared data is split as train and test sets and used to build the Naive Bayes model. The model's performance is evaluated using a cross table.
+
+```{r Libraries}
+library(NLP)
+library(tm)
+library(SnowballC)
+library(RColorBrewer)
+library(wordcloud)
+library(e1071)
+library(gmodels)
+```
+
+## Uploading Dataset
+
+```{r Data}
+#uploading dataset
+msgs <- read.delim(file.choose(), quote = "", header = F, stringsAsFactors = F, col.names = c('type', 'text'))
+```
+
+## Data Exploration and Preparation
+
+### Exploration
+
+```{r Exploration}
+#data structure
+str(msgs)
+
+#converting type variable to factor
+msgs$type <- as.factor(msgs$type)
+
+#new data structure
+str(msgs)
+
+#printing proportions of message type
+table(msgs$type)
+```
+
+The majority of the SMS messages are classified as ham. There are a total of 5574 messages where ham makes up 86.6 percent of the set and spam makes up 13.4 percent.
+
+### Preparation
+
+The dataset cannot be used as it is with the Naive Bayes. It has to be cleaned and standardized. First, a corpus of text documents has to be created first. This corpus consists of text documents where each SMS message is contained as a single document. This corpus will allow us to clean the text by removing stopwords (common words), numbers, punctuation and lowercasing all characters. Once the SMS data is cleaned, it is then tokenized where the messages are split as individual components. These components are tokens which are individual words. Tokenization is done using the DocumentTermMatrix() function from the tm library. The dataset is then split as training and testing subsets after the corpus is converted to a Document Term Matrix.
+
+```{r Corpus}
+#using VCorpus() passing VectorSource() as a parameter to create the corpus
+#VectorSource() creates the source object of the msgs$text vector
+msgs_corp <- VCorpus(VectorSource(msgs$text))
+
+print(msgs_corp)
+```
+
+The corpus object contains 5574 documents, meaning that there is a document for each SMS message.
+
+Using tm_map() function will allow us to clean the text of stopwords, numbers, punctuation and allow us to lowercase the text. The text will also undergo stemming. Stemming reduces the complexity of the text by replacing versions of a word to its simplest form. For example, stemming words like training, trains, trained to just train.
+
+```{r Cleaning Corpus}
+#lowercasing SMS messages using content_transformer() function and tolower() function as parameter
+msgs_corp_clean <- tm_map(msgs_corp, content_transformer(tolower))
+
+#removing numbers
+msgs_corp_clean <- tm_map(msgs_corp_clean, removeNumbers)
+
+#removing stopwords using removeWords() function and stopwords() function that supplies the list of stopwords to be removed
+msgs_corp_clean <- tm_map(msgs_corp_clean, removeWords, stopwords())
+
+#removing punctuation using removePunctuation()
+msgs_corp_clean <- tm_map(msgs_corp_clean, removePunctuation)
+
+#stemming documents using stemDocuments() function from SnowBallC library
+msgs_corp_clean <- tm_map(msgs_corp_clean, stemDocument)
+
+#removing extra white spaces using stripWhitespace()
+msgs_corp_clean <- tm_map(msgs_corp_clean, stripWhitespace)
+```
+
+The cleaned corpus is now tokenized using DocumentTermMatrix(). The corpus is converted into a matrix of word counts for each document.
+
+```{r Tokenization}
+#creating the DTM
+msgs_dtm <- DocumentTermMatrix(msgs_corp_clean)
+
+#inspecting the matrix
+msgs_dtm
+```
+
+The output of the dtm object shows that there are 5574 documents (the original amount of SMS messages). There are also 6630 terms (words) which is less than the amount of terms in the original dataset since the messages were cleaned of stopwords, numbers and punctuation. With 5574 documents and 6630 terms, there are a total of 36,955,620 entries in the matrix. The output shows there are 42,680 non-sparse entries (1) and 36,912,940 sparse entries (0). 
+
+The DTM is now split into training and testing subsets. The data is split using a 70:30 ratio where there are 3902 training messages and 1672 testing messages.
+
+```{r Training Testing Sets}
+#training subset
+msgs_dtm_train <- msgs_dtm[1:3902,]
+
+#testing subset
+msgs_dtm_test <- msgs_dtm[3903:5574,]
+
+#testing and training labels
+
+msgs_train_label <- msgs[1:3902,]$type
+
+msgs_test_label <- msgs[3903:5574,]$type
+```
+
+The train and test subsets contain similar proportions with each other and the original dataset (approximately 86 percent ham and 13 percent spam messages)
+
+## Word Clouds
+
+Before building the Naive Bayes model, we create word clouds of the original, test and train datasets. The word clouds will print the most abundant words in the sets. Word clouds can make the differences between a spam and ham message clear.
+
+```{r Main Word Cloud}
+#printing word cloud of main dataset (printing 40 words that appear 60 or more times)
+wordcloud(msgs_corp_clean, min.freq = 60, max.words = 40, random.order = F)
+```
+
+The most common words in the entire dataset are words like call, free, get and now.
+
+The subsets are printed using subsets created from the original set (msgs_corp_clean) using the subset() function included in base R. This will avoid the trouble of taking the train and test dtm sets and converting them back to regular sets.
+
+```{r Spam Word Cloud}
+#printing spam subset
+wordcloud(subset(msgs, type=="spam")$text, min.freq = 60, max.words = 40, random.order = F)
+```
+
+Call, free, mobile, now, reply and prize are some of the most common words in the spam subset. These words are commonly found in spam messages.
+
+```{r Ham Word Cloud}
+#printing ham subset
+wordcloud(subset(msgs, type=="ham")$text, min.freq = 60, max.words = 40, random.order = F)
+```
+
+The ham messages contain different words compared to spam messages. Words like can, get, just and will are found in a regular message.
+
+The spam messages contain more alluring words that give a positive and urgent ambiance. This is not the case in the regular messages.
+
+### Further Processing
+
+There are a large number of variables in the DTM. In order to get rid of unnecessary features, words that do not appear in at least 6 messages are removed.
+
+```{r Frequent Words}
+#vector containing words appearing in at least 6 documents
+msgs_freq_words <- findFreqTerms(msgs_dtm, 6)
+
+#printing frequent words
+str(msgs_freq_words)
+```
+
+To train and test the model, the frequent words are filtered from the dtm training and testing dtms. This way words that are somewhat unique to each message are removed.
+
+```{r Filter Words}
+#filtering training
+msgs_dtm_freq_train <- msgs_dtm_train[, msgs_freq_words]
+
+#filtering testing
+msgs_dtm_freq_test <- msgs_dtm_test[, msgs_freq_words]
+```
+
+The dtm objects contain numerical variables (counts of words) so they are converted to categorical variables. A function is created that converts the values to yes or no strings if the values are greater than zero.
+
+```{r Converting Function}
+#creating converting function
+convert_count <- function(x) {
+  x <- ifelse(x > 0, "Yes", "No")
+}
+
+#applying to test and train subsets (msgs_dtm_freq_)
+msgs_train <- apply(msgs_dtm_freq_train, MARGIN = 2, convert_count)
+
+#margin = 2 takes columns
+
+msgs_test <- apply(msgs_dtm_freq_test, MARGIN = 2, convert_count)
+```
+
+## Naive Bayes Model
+
+Now the NB model is trained and tested using the cleaned and processed data. The NB model comes from the e1071 package.
+
+```{r NB Model}
+#building model
+msgs_class <- naiveBayes(msgs_train, msgs_train_label)
+```
+
+### Evaluating Model Performance
+
+The model is tested and evaluated using the CrossTable() function from the gmodels package.
+
+```{r Evaluating}
+#making predictions
+msgs_pred <- predict(msgs_class, msgs_test)
+
+#using cross table to evaluate
+CrossTable(msgs_test_label, msgs_pred, prop.chisq = F, prop.t = F, dnn = c("actual", "predicted"))
+```
+
+The cross table shows that the model has great performance. The model's accuracy is approximately 97.97 percent. It can predict with high accuracy whether or not a SMS message is spam. The model has a 98.29 percent precision. This shows that the model was correct most of the time out of all the ham messages it predicted. It also has a 99.38 percent recall. It means that the model can correctly predict ham messages from the set of all true ham messages.
+
+### Resources
+
+UCI Machine Learning Repository: SMS Spam Collection Data Set. (n.d.). Retrieved May 24, 2020, from https://archive.ics.uci.edu/ml/datasets/SMS+Spam+Collection#
+
+Lantz, B. (2015). Machine Learning with R: discover how to build machine learning algorithms, prepare data, and dig deep into data prediction techniques with R. Second edition. Packt publishing.
